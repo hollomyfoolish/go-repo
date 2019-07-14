@@ -1,0 +1,5 @@
+node_modules/
+windows_amd64/
+vendor/
+mod/
+bin/
