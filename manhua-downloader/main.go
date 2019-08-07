@@ -1,14 +1,22 @@
 package main
 
+/**
+
+go run main.go /Users/i311688/gitrepo/go-repo/manhua-downloader/list.missing.txt
+
+**/
 import (
-    "fmt"
-	"os"
+	"bufio"
+	"fmt"
 	"io"
 	"log"
-	"bufio"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"os"
 	"strings"
 	"sync"
-	"net/http"
+
 	// "io/ioutil"
 
 	"github.com/PuerkitoBio/goquery"
@@ -19,9 +27,28 @@ const ARG_SRCURL = "srcUrl"
 const ARG_SRCLIST = "srcList"
 
 var picUrlKey = "var mhurl="
-var picHost = "http://p1.xiaoshidi.net/"
+var picHost = "http://p1.manhuapan.com/"
+
 // var baseFolder = "C:/Users/i311688/Desktop/MyTemp/manga/hzw/"
 var baseFolder = "/Users/i311688/entertainment/manga/one_piece/"
+var httpClient *http.Client
+
+func init() {
+	proxyStr := "http://proxy.pal.sap.corp:8080"
+	proxyURL, err := url.Parse(proxyStr)
+	if err != nil {
+		fmt.Printf("%s\n", err)
+		return
+	}
+	transport := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
+	}
+	cookieJar, _ := cookiejar.New(nil)
+	httpClient = &http.Client{
+		Transport: transport,
+		Jar:       cookieJar,
+	}
+}
 
 func main() {
 	args := parseArgs()
@@ -39,12 +66,12 @@ func downloadWithSrcUrl(args map[string]string) {
 	}
 	url := args[ARG_SRCURL]
 	fmt.Printf("source URL is: %s \nbase folder is: %s\n", url, baseFolder)
-	resp, err := http.Get(url)
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		fmt.Printf("source url %s not avaiable: %v\n", url, err)
 		return
 	}
-	
+
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
 		fmt.Printf("source url %s not avaiable: %v\n", url, err)
@@ -71,13 +98,13 @@ func downloadWithList() {
 	fmt.Printf("destination folder is: %s\n", baseFolder)
 
 	file, err := os.Open(path)
-    if err != nil {
-        log.Fatal(err)
-    }
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	scanner := bufio.NewScanner(file)
 	var urls []string
-    for scanner.Scan() {
+	for scanner.Scan() {
 		url := scanner.Text()
 		url = strings.Trim(url, " ")
 		if url != "" {
@@ -85,35 +112,37 @@ func downloadWithList() {
 		}
 	}
 	file.Close()
-	
+
 	downloadWithUrls(urls)
 }
 
 func downloadWithUrls(urls []string) {
 	var wg sync.WaitGroup
 	wg.Add(len(urls))
-	for _, url := range urls{
+	for _, url := range urls {
 		go download(url, &wg)
 	}
 	wg.Wait()
 }
 
 func download(url string, wg *sync.WaitGroup) {
-	defer wg.Done()	
+	defer wg.Done()
 	initFolder := false
 	folder := ""
 	picIdx := 0
 	title := ""
 	baseUrl := url
+	var jobs [](func())
+	picWg := sync.WaitGroup{}
 	for {
 		hasNext := false
 		fmt.Printf("download %s\n", url)
-		resp, err := http.Get(url)
+		resp, err := httpClient.Get(url)
 		if err != nil {
 			fmt.Printf("%v\n", err)
 			return
 		}
-		
+
 		doc, err := goquery.NewDocumentFromReader(resp.Body)
 		if err != nil {
 			fmt.Printf("download %s failed: %v\n", url, err)
@@ -130,6 +159,14 @@ func download(url string, wg *sync.WaitGroup) {
 			})
 		}
 
+		doc.Find("a.pure-button.pure-button-primary").Each(func(i int, s *goquery.Selection) {
+			if s.Text() == "下一页" {
+				href, _ := s.Attr("href")
+				url = baseUrl + href
+				// fmt.Printf("next is %s\n", url)
+				hasNext = true
+			}
+		})
 		// find the pic url
 		keyLen := len(picUrlKey)
 		doc.Find("body script").Each(func(i int, s *goquery.Selection) {
@@ -139,30 +176,35 @@ func download(url string, wg *sync.WaitGroup) {
 				text = text[idx:]
 				idx2 := strings.Index(text, ";")
 				// fmt.Printf("script is: %d, %d, %s\n", keyLen, idx2, text)
-				picUrl := text[keyLen + 1 : idx2 - 1]
-				downloadPic(fmt.Sprintf("%s%s", picHost, picUrl), folder, picIdx)
+				picUrl := text[keyLen+1 : idx2-1]
+				jobs = append(jobs, createJob(fmt.Sprintf("%s%s", picHost, picUrl), folder, picIdx, &picWg))
+				// downloadPic(fmt.Sprintf("%s%s", picHost, picUrl), folder, picIdx)
 			}
 		})
-		
-		doc.Find("a.pure-button.pure-button-primary").Each(func(i int, s *goquery.Selection) {
-			if s.Text() == "下一页" {
-				href, _ := s.Attr("href")
-				url = baseUrl + href
-				// fmt.Printf("next is %s\n", url)
-				hasNext = true
-			}
-		})
+
 		resp.Body.Close()
-		
+
 		picIdx++
 		if hasNext == false {
-			fmt.Printf("%s downloading finished: %d\n", title, picIdx)
 			break
 		}
 	}
+	picWg.Add(picIdx)
+	for _, job := range jobs {
+		go job()
+	}
+	picWg.Wait()
+	fmt.Printf("%s downloading finished: %d\n", title, picIdx)
 }
 
-func downloadPic (picUrl string, folder string, picIdx int) {
+func createJob(url string, folder string, picIdx int, wg *sync.WaitGroup) func() {
+	return func() {
+		downloadPic(url, folder, picIdx)
+		wg.Done()
+	}
+}
+
+func downloadPic(picUrl string, folder string, picIdx int) {
 	fmt.Printf("download %s\n", picUrl)
 	filePath := folder + fmt.Sprintf("%04d", picIdx) + ".jpg"
 	if _, e := os.Stat(filePath); os.IsNotExist(e) == false {
@@ -170,14 +212,14 @@ func downloadPic (picUrl string, folder string, picIdx int) {
 		return
 	}
 
-	resp, err := http.Get(picUrl)
+	resp, err := httpClient.Get(picUrl)
 	if err != nil {
 		fmt.Printf("download pic %s failed: %v\n", picUrl, err)
 		return
 	}
 	defer resp.Body.Close()
 	img, _ := os.Create(filePath)
-    defer img.Close()
+	defer img.Close()
 	_, err = io.Copy(img, resp.Body)
 	if err == nil {
 		fmt.Println("done")
@@ -191,10 +233,10 @@ func parseArgs() map[string]string {
 
 	for _, arg := range os.Args {
 		idx := strings.Index(arg, "-D")
-		if idx == 0 { 
+		if idx == 0 {
 			idx2 := strings.Index(arg, "=")
-			if idx2 >= 0 && idx2 < (len(arg) - 1){
-				args[arg[idx + 2:idx2]] = arg[idx2 + 1:]
+			if idx2 >= 0 && idx2 < (len(arg)-1) {
+				args[arg[idx+2:idx2]] = arg[idx2+1:]
 			}
 		}
 	}
