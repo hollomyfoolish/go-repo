@@ -31,3 +31,18 @@ func retrive(ch <-chan int, wg *sync.WaitGroup) {
 	fmt.Printf("get: %d\n", d)
 	wg.Done()
 }
+
+func TestExecutor(t *testing.T) {
+	var jobs []func()
+	count := 100
+	for i := 1; i <= count; i++ {
+		jobs = append(jobs, createFunc(i))
+	}
+	ExecuteJobs(jobs, 5)
+}
+
+func createFunc(n int) func() {
+	return func() {
+		fmt.Printf("job %d\n", n)
+	}
+}

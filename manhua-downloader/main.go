@@ -119,10 +119,31 @@ func downloadWithList() {
 func downloadWithUrls(urls []string) {
 	var wg sync.WaitGroup
 	wg.Add(len(urls))
-	for _, url := range urls {
-		go download(url, &wg)
+	maxThread := 5
+
+	queue := make(chan string, len(urls))
+
+	for idx, url := range urls {
+		queue <- url
+		if idx < maxThread {
+			fmt.Printf("create download worker: %d\n", idx)
+			go startWorker(queue, &wg)
+		}
+		// go download(url, &wg)
 	}
 	wg.Wait()
+	close(queue)
+}
+
+func startWorker(queue <-chan string, wg *sync.WaitGroup) {
+	for {
+		url, ok := <-queue
+		if ok {
+			download(url, wg)
+		} else {
+			break
+		}
+	}
 }
 
 func download(url string, wg *sync.WaitGroup) {
