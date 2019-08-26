@@ -2,8 +2,8 @@ package main
 
 /**
 
-go run main.go /Users/i311688/gitrepo/go-repo/manhua-downloader/list.missing.txt
-
+go run main.go -DsrcList=/Users/i311688/gitrepo/go-repo/manhua-downloader/list.missing.txt -DbaseFolder=/Users/i311688/entertainment/manga/hunter/
+go run main.go -DsrcUrl=https://manhua.fzdm.com/10/ -DbaseFolder=/Users/i311688/entertainment/manga/hunter/
 **/
 import (
 	"bufio"
@@ -34,7 +34,7 @@ var baseFolder = "/Users/i311688/entertainment/manga/one_piece/"
 var httpClient *http.Client
 
 func init() {
-	proxyStr := "http://proxy.pal.sap.corp:8080"
+	proxyStr := "http://proxy.pvgl.sap.corp:8080"
 	proxyURL, err := url.Parse(proxyStr)
 	if err != nil {
 		fmt.Printf("%s\n", err)
@@ -51,12 +51,78 @@ func init() {
 }
 
 func main() {
+	// checkFailedUrl()
+
+	clean := setLogger()
+	defer clean()
+
 	args := parseArgs()
 
 	if _, ok := args[ARG_SRCURL]; ok {
 		downloadWithSrcUrl(args)
+	} else if _, ok := args[ARG_SRCLIST]; ok {
+		downloadWithList(args)
 	} else {
-		downloadWithList()
+		fmt.Println("source url or source list file path is required")
+	}
+}
+
+func checkFailedUrl() {
+	dir, err := os.Getwd()
+	if err != nil {
+		fmt.Println("can't get the log file")
+		os.Exit(1)
+	}
+	logPath := dir + "/main.log"
+
+	file, err := os.Open(logPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	scanner := bufio.NewScanner(file)
+	flag := "check page error: Get"
+	flagLen := len(flag)
+	set := make(map[string]bool)
+	for scanner.Scan() {
+		url := scanner.Text()
+		idx := strings.Index(url, flag)
+		if idx >= 0 {
+			idx2 := strings.LastIndex(url, ":")
+			url = url[idx+flagLen : idx2]
+			url = strings.ReplaceAll(url, ": read tcp 10.59.188.100:65222->172.20.5.58:8080: read", "")
+			url = strings.ReplaceAll(url, ": read tcp 10.59.188.100:49547->172.20.5.58:8080: read", "")
+			url = strings.Join(strings.Split(url, "/")[:5], "/") + "/"
+			set[url] = true
+		}
+	}
+	file.Close()
+	for key, _ := range set {
+		fmt.Println(key)
+	}
+
+	fmt.Println("done")
+	os.Exit(0)
+}
+
+func setLogger() func() {
+	dir, err := os.Getwd()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	logPath := dir + "/main.log"
+	fmt.Printf("log file path: %s\n", logPath)
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err == nil {
+		os.Stdout = logFile
+		return func() {
+			logFile.Close()
+		}
+	} else {
+		fmt.Printf("%v\n", err)
+		return func() {
+			// do nothing
+		}
 	}
 }
 
@@ -86,14 +152,11 @@ func downloadWithSrcUrl(args map[string]string) {
 	downloadWithUrls(urls)
 }
 
-func downloadWithList() {
-	if len(os.Args) < 2 {
-		log.Fatal("file path of list required")
-	}
-	path := os.Args[1]
+func downloadWithList(args map[string]string) {
+	path := args[ARG_SRCLIST]
 	fmt.Printf("file path is: %s\n", path)
-	if len(os.Args) >= 3 {
-		baseFolder = os.Args[2]
+	if p, ok := args[ARG_BASEFOLER]; ok {
+		baseFolder = p
 	}
 	fmt.Printf("destination folder is: %s\n", baseFolder)
 
@@ -107,7 +170,7 @@ func downloadWithList() {
 	for scanner.Scan() {
 		url := scanner.Text()
 		url = strings.Trim(url, " ")
-		if url != "" {
+		if url != "" && !strings.HasPrefix(url, "#") {
 			urls = append(urls, url)
 		}
 	}
@@ -117,11 +180,13 @@ func downloadWithList() {
 }
 
 func downloadWithUrls(urls []string) {
+	// urls = urls[:20]
 	var wg sync.WaitGroup
 	wg.Add(len(urls))
 	maxThread := 5
 
 	queue := make(chan string, len(urls))
+	fmt.Printf("url amount: %d\n", len(urls))
 
 	for idx, url := range urls {
 		queue <- url
@@ -139,28 +204,33 @@ func startWorker(queue <-chan string, wg *sync.WaitGroup) {
 	for {
 		url, ok := <-queue
 		if ok {
+			fmt.Printf("start %s\n", url)
 			download(url, wg)
 		} else {
+			fmt.Println("url queue is closed")
 			break
 		}
 	}
 }
 
 func download(url string, wg *sync.WaitGroup) {
-	defer wg.Done()
+	baseUrl := url
+	defer func() {
+		wg.Done()
+		fmt.Printf("download %s done\n", baseUrl)
+	}()
 	initFolder := false
 	folder := ""
 	picIdx := 0
 	title := ""
-	baseUrl := url
 	var jobs [](func())
 	picWg := sync.WaitGroup{}
 	for {
 		hasNext := false
-		fmt.Printf("download %s\n", url)
+		// fmt.Printf("download %s\n", url)
 		resp, err := httpClient.Get(url)
 		if err != nil {
-			fmt.Printf("%v\n", err)
+			fmt.Printf("check page error: %v\n", err)
 			return
 		}
 
@@ -215,7 +285,7 @@ func download(url string, wg *sync.WaitGroup) {
 		go job()
 	}
 	picWg.Wait()
-	fmt.Printf("%s downloading finished: %d\n", title, picIdx)
+	// fmt.Printf("%s finished: %d\n", title, picIdx)
 }
 
 func createJob(url string, folder string, picIdx int, wg *sync.WaitGroup) func() {
@@ -226,10 +296,10 @@ func createJob(url string, folder string, picIdx int, wg *sync.WaitGroup) func()
 }
 
 func downloadPic(picUrl string, folder string, picIdx int) {
-	fmt.Printf("download %s\n", picUrl)
+	// fmt.Printf("download %s\n", picUrl)
 	filePath := folder + fmt.Sprintf("%04d", picIdx) + ".jpg"
 	if _, e := os.Stat(filePath); os.IsNotExist(e) == false {
-		fmt.Printf("%s is already downloaded\n", picUrl)
+		// fmt.Printf("%s is already downloaded\n", picUrl)
 		return
 	}
 
@@ -243,7 +313,7 @@ func downloadPic(picUrl string, folder string, picIdx int) {
 	defer img.Close()
 	_, err = io.Copy(img, resp.Body)
 	if err == nil {
-		fmt.Println("done")
+		// fmt.Println("done")
 	} else {
 		fmt.Println("error")
 	}

@@ -1,0 +1,13 @@
+args: map[baseFolder:/Users/i311688/entertainment/manga/hunter/ srcList:/Users/i311688/gitrepo/go-repo/manhua-downloader/list.missing.txt]
+file path is: /Users/i311688/gitrepo/go-repo/manhua-downloader/list.missing.txt
+destination folder is: /Users/i311688/entertainment/manga/hunter/
+url amount: 3
+create download worker: 0
+create download worker: 1
+start https://manhua.fzdm.com/10/Vol_007/
+create download worker: 2
+start https://manhua.fzdm.com/10/Vol_010/
+start https://manhua.fzdm.com/10/Vol_004/
+download https://manhua.fzdm.com/10/Vol_010/ done
+download https://manhua.fzdm.com/10/Vol_007/ done
+download https://manhua.fzdm.com/10/Vol_004/ done
